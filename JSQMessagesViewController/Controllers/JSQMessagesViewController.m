@@ -65,6 +65,7 @@ static void * kJSQMessagesKeyValueObservingContext = &kJSQMessagesKeyValueObserv
 - (NSString *)jsq_currentlyComposedMessageText;
 
 - (void)jsq_handleDidChangeStatusBarFrameNotification:(NSNotification *)notification;
+- (void)jsq_didReceiveMenuWillShowNotification:(NSNotification *)notification;
 
 - (void)jsq_updateKeyboardTriggerPoint;
 - (void)jsq_setToolbarBottomLayoutGuideConstant:(CGFloat)constant;
@@ -272,6 +273,13 @@ static void * kJSQMessagesKeyValueObservingContext = &kJSQMessagesKeyValueObserv
     [self.collectionView.collectionViewLayout invalidateLayoutWithContext:[JSQMessagesCollectionViewFlowLayoutInvalidationContext context]];
 }
 
+#pragma mark - UIResponder
+
+- (BOOL)canBecomeFirstResponder
+{
+    return YES;
+}
+
 #pragma mark - Messages view controller
 
 - (void)didPressSendButton:(UIButton *)button
@@ -464,9 +472,26 @@ static void * kJSQMessagesKeyValueObservingContext = &kJSQMessagesKeyValueObserv
 
 #pragma mark - Collection view delegate
 
-- (BOOL)collectionView:(UICollectionView *)collectionView shouldHighlightItemAtIndexPath:(NSIndexPath *)indexPath
+- (BOOL)collectionView:(UICollectionView *)collectionView shouldShowMenuForItemAtIndexPath:(NSIndexPath *)indexPath
 {
+    return YES;
+}
+
+- (BOOL)collectionView:(UICollectionView *)collectionView canPerformAction:(SEL)action forItemAtIndexPath:(NSIndexPath *)indexPath withSender:(id)sender
+{
+    if (action == @selector(copy:)) {
+        return YES;
+    }
+    
     return NO;
+}
+
+- (void)collectionView:(JSQMessagesCollectionView *)collectionView performAction:(SEL)action forItemAtIndexPath:(NSIndexPath *)indexPath withSender:(id)sender
+{
+    if (action == @selector(copy:)) {
+        id<JSQMessageData> messageData = [self collectionView:collectionView messageDataForItemAtIndexPath:indexPath];
+        [[UIPasteboard generalPasteboard] setString:[messageData text]];
+    }
 }
 
 #pragma mark - Collection view delegate flow layout
@@ -588,6 +613,74 @@ static void * kJSQMessagesKeyValueObservingContext = &kJSQMessagesKeyValueObserv
     if (self.keyboardController.keyboardIsVisible) {
         [self jsq_setToolbarBottomLayoutGuideConstant:CGRectGetHeight(self.keyboardController.currentKeyboardFrame)];
     }
+}
+
+- (void)jsq_didReceiveMenuWillShowNotification:(NSNotification *)notification
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:UIMenuControllerWillShowMenuNotification
+                                                  object:nil];
+    
+    UIMenuController *menu = [notification object];
+    [menu setMenuVisible:NO animated:NO];
+    
+    CGRect menuFrame = [self.view convertRect:menu.menuFrame toView:nil];
+    
+    NSLog(@"MENU FRAME = %@", NSStringFromCGRect(menu.menuFrame));
+    
+//    UIView *v = [[UIView alloc] initWithFrame:menuFrame];
+//    v.backgroundColor = [[UIColor redColor] colorWithAlphaComponent:0.5];
+//    [self.view addSubview:v];
+    
+    NSUInteger intersectedItem = NSNotFound;
+    
+    for (JSQMessagesCollectionViewCell *eachCell in [self.collectionView visibleCells]) {
+        CGRect eachCellFrame = [self.collectionView convertRect:eachCell.frame toView:nil];
+        
+        if (CGRectIntersectsRect(menuFrame, eachCellFrame)) {
+            intersectedItem = [self.collectionView indexPathForCell:eachCell].item;
+            
+            NSLog(@"INTERSECT = %d", intersectedItem);
+        }
+    }
+    
+    if (intersectedItem + 1 >= [self.collectionView numberOfItemsInSection:0]) {
+        NSLog(@"RETURN ");
+        
+        [menu setMenuVisible:YES animated:YES];
+        
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(jsq_didReceiveMenuWillShowNotification:)
+                                                     name:UIMenuControllerWillShowMenuNotification
+                                                   object:nil];
+        
+        return;
+    }
+    
+    if (intersectedItem != NSNotFound) {
+        NSIndexPath *nextIndexPath = [NSIndexPath indexPathForItem:intersectedItem + 1 inSection:0];
+        
+        NSLog(@"FOUND = %@", nextIndexPath);
+        
+        JSQMessagesCollectionViewCell *selectedCell = (JSQMessagesCollectionViewCell *)[self.collectionView cellForItemAtIndexPath:nextIndexPath];
+        
+        CGRect selectedCellFrame = [self.collectionView convertRect:selectedCell.frame toView:nil];
+        
+        CGRect finalFrame = CGRectMake(selectedCellFrame.origin.x,
+                                       selectedCellFrame.origin.y + CGRectGetHeight(selectedCell.messageBubbleTopLabel.frame) + CGRectGetHeight(selectedCell.cellTopLabel.frame),
+                                       selectedCellFrame.size.width,
+                                       selectedCellFrame.size.height);
+        
+        NSLog(@"FINAL = %@", NSStringFromCGRect(finalFrame));
+        
+        [menu setTargetRect:finalFrame inView:self.view];
+        [menu setMenuVisible:YES animated:YES];
+    }
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(jsq_didReceiveMenuWillShowNotification:)
+                                                 name:UIMenuControllerWillShowMenuNotification
+                                               object:nil];
 }
 
 #pragma mark - Key-value observing
@@ -797,10 +890,19 @@ static void * kJSQMessagesKeyValueObservingContext = &kJSQMessagesKeyValueObserv
                                                  selector:@selector(jsq_handleDidChangeStatusBarFrameNotification:)
                                                      name:UIApplicationDidChangeStatusBarFrameNotification
                                                    object:nil];
+        
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(jsq_didReceiveMenuWillShowNotification:)
+                                                     name:UIMenuControllerWillShowMenuNotification
+                                                   object:nil];
     }
     else {
         [[NSNotificationCenter defaultCenter] removeObserver:self
                                                         name:UIApplicationDidChangeStatusBarFrameNotification
+                                                      object:nil];
+        
+        [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                        name:UIMenuControllerWillShowMenuNotification
                                                       object:nil];
     }
 }
